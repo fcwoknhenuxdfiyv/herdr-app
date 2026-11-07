@@ -275,6 +275,16 @@ Move a pane's edge (default: the focused pane's) "left", "right", "up" or "down"
 | `amount` | no |
 | `pane` | no |
 
+## `pane.move`
+
+Move a pane to another pane of its tab: beside it on that edge ("left", "right", "top" or "bottom", taking half of its room), or with no edge trading places with it, as dropping a pane on another does. The moved pane keeps its terminal and takes the keyboard; a zoomed tab shows all its panes again.
+
+| Argument | Required |
+|---|---|
+| `pane` | yes |
+| `target` | yes |
+| `edge` | no |
+
 ## `terminal.peek`
 
 Peek at a running terminal over the tab, with keep-as-tab and close controls.

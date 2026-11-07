@@ -2803,7 +2803,7 @@ impl AppWindow {
             if !args.is_object() { args = json!({}); }
             args["machine"] = json!(machine);
         }
-        if matches!(name, "space.new" | "space.close" | "space.rename" | "space.move" | "tab.new" | "tab.close" | "tab.rename" | "tab.move" | "pane.split" | "pane.close" | "pane.swap" | "pane.resize" | "terminal.keep" | "terminal.park") {
+        if matches!(name, "space.new" | "space.close" | "space.rename" | "space.move" | "tab.new" | "tab.close" | "tab.rename" | "tab.move" | "pane.split" | "pane.close" | "pane.swap" | "pane.resize" | "pane.move" | "terminal.keep" | "terminal.park") {
             let node = ["id", "space", "pane"].into_iter().find_map(|k| Self::arg(&args, k));
             let target = node.and_then(|id| self.model.space(id).or_else(|| self.model.space_of(id))).or_else(|| self.model.active_space());
             let machine = if name == "space.new" { Self::arg(&args, "machine") }
@@ -3063,6 +3063,21 @@ impl AppWindow {
                 let Some(pane) = Self::owned(a, "pane").or_else(|| self.model.focused_pane()) else { return self.fail("no pane to resize") };
                 if let Err(e) = self.resize_pane(&pane, dir, amount) {
                     return self.fail(e);
+                }
+            }
+            "pane.move" => {
+                let edge = match move_edge(a) {
+                    Ok(edge) => edge,
+                    Err(e) => return self.fail(e),
+                };
+                let (pane, target) = (Self::arg(a, "pane").unwrap_or_default(), Self::arg(a, "target").unwrap_or_default());
+                if !self.model.move_pane(pane, target, edge) {
+                    return self.fail(format!("pane.move: {pane:?} and {target:?} must be two different panes of the same tab"));
+                }
+                if let Some(ctx) = self.model.tab_of(pane).map(|c| c.id.clone())
+                    && let Some(c) = self.model.tab_mut(&ctx)
+                {
+                    c.zoomed = None;
                 }
             }
             // ---- terminals
@@ -4700,6 +4715,22 @@ fn resize_args(args: &Value) -> Result<(&str, f32), String> {
     Ok((dir, amount))
 }
 
+/// `pane.move`'s edge: a side of the target, or none to trade places.
+fn move_edge(args: &Value) -> Result<Option<crate::layout::Edge>, String> {
+    use crate::layout::Edge;
+    match args.get("edge") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => match s.as_str() {
+            "left" => Ok(Some(Edge::Left)),
+            "right" => Ok(Some(Edge::Right)),
+            "top" => Ok(Some(Edge::Top)),
+            "bottom" => Ok(Some(Edge::Bottom)),
+            other => Err(format!("pane.move edge is left, right, top or bottom (or omitted: trade places), not {other:?}")),
+        },
+        Some(other) => Err(format!("pane.move edge must be a string, not {other}")),
+    }
+}
+
 fn swap_by(args: &Value) -> Result<SwapBy<'_>, String> {
     if args.get("direction").is_some_and(|d| !d.is_string() && !d.is_null()) {
         return Err("pane.swap direction must be a string (or null to omit it)".into());
@@ -5898,6 +5929,41 @@ export default class Probe extends View {
         for bad in [json!(0), json!(-0.2)] {
             assert!(resize_args(&json!({"direction": "left", "amount": bad})).unwrap_err().contains("above 0"), "{bad}");
         }
+    }
+
+    #[test]
+    fn pane_move_takes_a_side_of_the_target_or_none() {
+        use super::move_edge;
+        use crate::layout::Edge;
+        use serde_json::json;
+        assert_eq!(move_edge(&json!({})), Ok(None));
+        assert_eq!(move_edge(&json!({"edge": null})), Ok(None));
+        for (name, edge) in [("left", Edge::Left), ("right", Edge::Right), ("top", Edge::Top), ("bottom", Edge::Bottom)] {
+            assert_eq!(move_edge(&json!({"edge": name})), Ok(Some(edge)));
+        }
+        assert!(move_edge(&json!({"edge": "up"})).unwrap_err().contains("left, right, top or bottom"));
+        assert!(move_edge(&json!({"edge": 3})).unwrap_err().contains("must be a string"));
+    }
+
+    /// tmux's main-vertical, as a mod does it with pane.move: the others go left of
+    /// the main pane, then under each other, whatever the tab looked like before.
+    #[test]
+    fn moving_panes_left_then_below_builds_a_side_column_beside_a_main_pane() {
+        use crate::layout::{Axis, Edge};
+        let mut m = swap_model();
+        m.split("x2", Axis::Column, "x4", "t4");
+        m.split("x1", Axis::Column, "x5", "t5");
+        // [[x1/x5] | [x2/x4]], main = x4 (bottom right).
+        assert!(m.move_pane("x1", "x4", Some(Edge::Left)));
+        assert!(m.move_pane("x2", "x1", Some(Edge::Bottom)));
+        assert!(m.move_pane("x5", "x2", Some(Edge::Bottom)));
+        let root = &m.tab("c1").unwrap().root;
+        let row = root.parent_of("x4").unwrap();
+        assert_eq!(row.axis(), Some(Axis::Row));
+        let side = root.parent_of("x1").unwrap();
+        assert_eq!(side.axis(), Some(Axis::Column));
+        assert_eq!(side.children().iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["x1", "x2", "x5"]);
+        assert_eq!(row.children().iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), [side.id.as_str(), "x4"]);
     }
 
     #[test]

@@ -61,6 +61,7 @@ pub const COMMANDS: &[Command] = &[
     cmd("pane.go", &[req("direction")], "Focus the pane or focusable mod to the \"left\", \"right\", \"up\" or \"down\"."),
     cmd("pane.swap", &[opt("direction"), opt("pane"), opt("target")], "Swap a pane (default: the focused one) with its neighbor in a direction, or with another pane of its tab (target). Give exactly one of direction or target."),
     cmd("pane.resize", &[req("direction"), opt("amount"), opt("pane")], "Move a pane's edge (default: the focused pane's) \"left\", \"right\", \"up\" or \"down\": the divider on that side, else the one on the opposite side, so a pane at the tab's edge still resizes. amount up to 1 is a share of the two neighbors' combined length (default 0.05); above 1, logical pixels."),
+    cmd("pane.move", &[req("pane"), req("target"), opt("edge")], "Move a pane to another pane of its tab: beside it on that edge (\"left\", \"right\", \"top\" or \"bottom\", taking half of its room), or with no edge trading places with it, as dropping a pane on another does. The moved pane keeps its terminal and takes the keyboard; a zoomed tab shows all its panes again."),
     cmd("terminal.peek", &[req("terminal")], "Peek at a running terminal over the tab, with keep-as-tab and close controls."),
     cmd("terminal.show", &[opt("terminal"), opt("pane")], "Show a terminal in a pane for now, in place of its own (no terminal: back)."),
     cmd("terminal.copy", &[], "Copy the focused terminal's selection. With nothing selected, that key goes to the program."),

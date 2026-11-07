@@ -85,6 +85,14 @@ It works on the shown tab only and refuses while the tab is zoomed:
 herdr-app do pane.resize '{"direction":"right","amount":0.1}'
 ```
 
+`pane.move {pane, target, edge?}` puts a pane beside another pane of its tab, on
+the target's `left`, `right`, `top` or `bottom` (half of its room), or trades places
+with it when `edge` is left out. The moved pane keeps its terminal:
+
+```sh
+herdr-app do pane.move '{"pane":"p12","target":"p14","edge":"left"}'
+```
+
 `terminal.search` opens a find bar in the focused terminal. It searches that
 terminal's screen and scrollback; Enter and Shift-Enter move between matches,
 Escape closes the bar while its find field has focus, and each terminal keeps its own query (reopening selects it, so typing replaces it).

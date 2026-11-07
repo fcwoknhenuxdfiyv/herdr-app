@@ -559,7 +559,8 @@ The main ones:
 - Panes: `pane.split {direction: "right" | "down", pane?, argv? | mod?, props?}` (a new
   terminal, or a mod pane), `pane.close {pane?}`,
   `pane.zoom {pane?}`, `pane.focus {pane | terminal}`, `pane.go {direction}`,
-  `pane.swap {pane?, direction | target}`, `pane.resize {direction, amount?, pane?}`.
+  `pane.swap {pane?, direction | target}`, `pane.resize {direction, amount?, pane?}`,
+  `pane.move {pane, target, edge?}`.
   `pane.go` prefers the most recently focused pane along the nearest edge in that
   direction; unvisited panes fall back to overlap, then top/left layout order.
   `pane.go` also reaches visible mods whose `mod.json` says `"focusable": true`, and
@@ -577,6 +578,11 @@ The main ones:
   shown tab resizes (its panes are measured on screen). For an absolute share, set the
   pane node's weight with `layout.resize {id: <pane>, weight}`: the neighbors in a split
   share by weight (new splits give each half).
+  `pane.move` puts `pane` beside `target` (another pane of the same tab) on its `left`,
+  `right`, `top` or `bottom`, taking half of its room, as dropping a pane on that edge does;
+  without `edge` the two trade places. The moved pane takes the keyboard and a zoomed tab
+  unzooms. With it a mod can rearrange a whole tab (tmux's main-vertical: move every other
+  pane left of the main one, then each under the previous).
   `pane.focus {terminal}` prefers the first visible layout terminal block showing that
   address, then its model pane. Clicking a terminal block focuses it too.
   While a layout terminal block is focused, implicit split/close/zoom/go/swap/resize and
