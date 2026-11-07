@@ -267,12 +267,13 @@ Swap a pane (default: the focused one) with its neighbor in a direction, or with
 
 ## `pane.resize`
 
-Move a pane's edge (default: the focused pane's) "left", "right", "up" or "down": the divider on that side, else the one on the opposite side, so a pane at the tab's edge still resizes. amount up to 1 is a share of the two neighbors' combined length (default 0.05); above 1, logical pixels.
+Move a pane's edge (default: the focused pane's) "left", "right", "up" or "down": the divider on that side, else the one on the opposite side, so a pane at the tab's edge still resizes. amount up to 1 is a share of the two neighbors' combined length (default 0.05); above 1, logical pixels. share (0 to 1) instead of amount places that divider so the pane has this share of the two neighbors' room.
 
 | Argument | Required |
 |---|---|
 | `direction` | yes |
 | `amount` | no |
+| `share` | no |
 | `pane` | no |
 
 ## `pane.move`

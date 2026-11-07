@@ -57,8 +57,9 @@ export function playSound(sound: string): null;
  *   tab.next, tab.prev.
  * Panes: pane.split {direction: "right" | "down", pane?}, pane.close {pane?}, pane.zoom {pane?},
  *   pane.focus {pane | terminal}, pane.go {direction}, pane.swap {pane?, direction | target},
- *   pane.resize {direction, amount?, pane?} (moves the divider on that side of the pane in that
- *   direction, else the opposite one; amount: a share of the two neighbors up to 1, default 0.05, else px),
+ *   pane.resize {direction, amount? | share?, pane?} (moves the divider on that side of the pane in that
+ *   direction, else the opposite one; amount: a share of the two neighbors up to 1, default 0.05, else px;
+ *   share: the pane's share of the two, absolute),
  *   pane.move {pane, target, edge?} (beside another pane of its tab on its left/right/top/bottom; no edge: trade places).
  *   Pane menus get target { pane, terminal }.
  * Terminals: terminal.open {argv?, folder?, place?: "tab" | "right" | "down"}, terminal.kill {terminal},

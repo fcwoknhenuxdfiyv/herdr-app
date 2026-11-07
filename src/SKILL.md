@@ -78,7 +78,8 @@ herdr-app do pane.swap '{"pane":"p12","target":"p14"}'
 `pane.resize {direction, amount?, pane?}` moves the divider on that side of `pane`
 (default: the focused one) in that direction, as tmux's resize-pane; a pane with
 nothing on that side moves its opposite divider instead. `amount` up to 1 is a share
-of the two neighbors' combined length (default 0.05); above 1 it's logical pixels.
+of the two neighbors' combined length (default 0.05); above 1 it's logical pixels;
+`share` instead places the divider so the pane has that share (0 to 1) of the two.
 It works on the shown tab only and refuses while the tab is zoomed:
 
 ```sh

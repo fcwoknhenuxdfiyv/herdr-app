@@ -3056,12 +3056,12 @@ impl AppWindow {
                 }
             }
             "pane.resize" => {
-                let (dir, amount) = match resize_args(a) {
+                let (dir, how) = match resize_args(a) {
                     Ok(parsed) => parsed,
                     Err(e) => return self.fail(e),
                 };
                 let Some(pane) = Self::owned(a, "pane").or_else(|| self.model.focused_pane()) else { return self.fail("no pane to resize") };
-                if let Err(e) = self.resize_pane(&pane, dir, amount) {
+                if let Err(e) = self.resize_pane(&pane, dir, how) {
                     return self.fail(e);
                 }
             }
@@ -3521,9 +3521,10 @@ impl AppWindow {
     }
 
     /// `pane.resize`: moves the divider on `dir`'s side of `pane` (else the one on the
-    /// opposite side) by `amount`: a share of the two neighbors' combined length when
-    /// up to 1, else unzoomed px. Positive always moves the edge toward `dir`.
-    fn resize_pane(&mut self, pane: &str, dir: &str, amount: f32) -> Result<(), String> {
+    /// opposite side): by a step (a share of the two neighbors' combined length when up
+    /// to 1, else unzoomed px; positive always moves the edge toward `dir`), or to the
+    /// pane's share of the two.
+    fn resize_pane(&mut self, pane: &str, dir: &str, how: Resize) -> Result<(), String> {
         let Some(tab) = self.model.tab_of(pane).filter(|c| c.root.find(pane).is_some_and(Node::is_pane)) else {
             return Err(format!("no pane {pane:?}"));
         };
@@ -3540,22 +3541,55 @@ impl AppWindow {
             _ => (Axis::Column, true),
         };
         // The divider on that side, else the opposite one: a pane at the edge still resizes.
-        let Some((container, index)) = tab.root.boundary_toward(pane, axis, forward).or_else(|| tab.root.boundary_toward(pane, axis, !forward)) else {
+        let Some((container, index, toward)) = tab.root.boundary_toward(pane, axis, forward).map(|b| (b.0, b.1, true))
+            .or_else(|| tab.root.boundary_toward(pane, axis, !forward).map(|b| (b.0, b.1, false)))
+        else {
             return Err(format!("pane.resize: nothing beside {pane:?} to resize against in that direction"));
         };
         if !tab.root.find(&container).is_some_and(Node::resizable) {
             return Err("pane.resize: the layout says this split is not resizable".into());
         }
-        let Some((_, la, lb)) = self.divider_neighbors(&container, index) else {
+        // The pane's side is the child before the divider when the divider is on its far side.
+        let pane_first = forward == toward;
+        let drawn = self.divider_neighbors(&container, index);
+        if let Resize::Share(share) = how
+            && drawn.is_none()
+        {
+            // Not drawn yet (or hidden): two weights can still be set in proportion.
+            let first = if pane_first { share } else { 1.0 - share };
+            return self.share_pair(&container, index, first);
+        }
+        let Some((_, la, lb)) = drawn else {
             return Err("pane.resize: the panes have not been drawn yet".into());
         };
         let zoom = settings::zoom();
         let (la, lb) = (la / zoom, lb / zoom);
-        let step = if amount <= 1.0 { amount * (la + lb) } else { amount };
-        // The divider moves toward `dir` (as tmux's resize-pane): right or down grows
-        // the child before it, whichever side of it the pane is on.
-        let new_a = if forward { la + step } else { la - step };
+        let new_a = match how {
+            Resize::Share(share) => (la + lb) * if pane_first { share } else { 1.0 - share },
+            Resize::By(amount) => {
+                let step = if amount <= 1.0 { amount * (la + lb) } else { amount };
+                // The divider moves toward `dir` (as tmux's resize-pane): right or down grows
+                // the child before it, whichever side of it the pane is on.
+                if forward { la + step } else { la - step }
+            }
+        };
         self.resize_pair(&container, index, la, lb, new_a);
+        Ok(())
+    }
+
+    /// Gives the child before divider `index` the share `first` of the pair's weights,
+    /// without screen geometry; a fixed (px) side can't be set that way.
+    fn share_pair(&mut self, container: &str, index: usize, first: f32) -> Result<(), String> {
+        let Some(parent) = self.find_node_mut(container) else { return Err(format!("no node {container:?}")) };
+        let Some(children) = parent.children_mut() else { return Err(format!("{container:?} has no children")) };
+        let shown: Vec<usize> = children.iter().enumerate().filter(|(_, c)| !c.hidden).map(|(i, _)| i).collect();
+        let (Some(&ia), Some(&ib)) = (shown.get(index), shown.get(index + 1)) else { return Err("pane.resize: no such divider".into()) };
+        if matches!(children[ia].size, Some(Span::Px { .. })) || matches!(children[ib].size, Some(Span::Px { .. })) {
+            return Err("pane.resize: the panes have not been drawn yet".into());
+        }
+        let (sa, sb) = pair_sizes(children[ia].size, children[ib].size, 1.0, first.clamp(0.01, 0.99));
+        children[ia].size = sa;
+        children[ib].size = sb;
         Ok(())
     }
 
@@ -4697,22 +4731,43 @@ fn pair_sizes(sa: Option<Span>, sb: Option<Span>, total: f32, new_a: f32) -> (Op
     }
 }
 
-/// `pane.resize`'s direction and amount: a share of the neighbors (up to 1) or px, positive.
-fn resize_args(args: &Value) -> Result<(&str, f32), String> {
+/// How far `pane.resize` moves a divider: by a step, or to a share of the two neighbors.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Resize {
+    /// Up to 1: a share of the neighbors' combined length; above 1: unzoomed px.
+    By(f32),
+    /// The pane's share of the two neighbors' room, 0 to 1.
+    Share(f32),
+}
+
+/// `pane.resize`'s direction and distance: amount (a share of the neighbors up to 1, or
+/// px, positive; default 0.05), or share (the pane's share of the two, 0 to 1).
+fn resize_args(args: &Value) -> Result<(&str, Resize), String> {
     let dir = match AppWindow::arg(args, "direction") {
         Some(dir @ ("left" | "right" | "up" | "down")) => dir,
         Some(dir) => return Err(format!("pane.resize direction is left, right, up or down, not {dir:?}")),
         None => return Err("pane.resize needs direction".into()),
     };
-    let amount = match args.get("amount") {
-        None | Some(Value::Null) => 0.05,
-        Some(Value::Number(n)) => n.as_f64().unwrap_or(0.0) as f32,
-        Some(other) => return Err(format!("pane.resize amount must be a number (a share up to 1, or px), not {other}")),
+    let number = |key: &str| match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(n)) => Ok(Some(n.as_f64().unwrap_or(0.0) as f32)),
+        Some(other) => Err(format!("pane.resize {key} must be a number, not {other}")),
     };
+    let (amount, share) = (number("amount")?, number("share")?);
+    if amount.is_some() && share.is_some() {
+        return Err("pane.resize takes amount or share, not both".into());
+    }
+    if let Some(share) = share {
+        if !share.is_finite() || !(0.0..=1.0).contains(&share) {
+            return Err(format!("pane.resize share must be between 0 and 1, not {share}"));
+        }
+        return Ok((dir, Resize::Share(share)));
+    }
+    let amount = amount.unwrap_or(0.05);
     if !amount.is_finite() || amount <= 0.0 {
         return Err(format!("pane.resize amount must be above 0, not {amount}"));
     }
-    Ok((dir, amount))
+    Ok((dir, Resize::By(amount)))
 }
 
 /// `pane.move`'s edge: a side of the target, or none to trade places.
@@ -5578,35 +5633,49 @@ mod tests {
         };
         let weights = |cx: &mut gpui::VisualTestContext| view.update(cx, |this, _| (weight(this, "p1"), weight(this, "p2")));
         // Each step is drawn before the next: the divider's neighbors are measured on screen.
-        let resize = |pane: &str, dir: &str, amount: f32, cx: &mut gpui::VisualTestContext| {
+        let resize = |pane: &str, dir: &str, how: super::Resize, cx: &mut gpui::VisualTestContext| {
             let r = view.update(cx, |this, cx| {
-                let r = this.resize_pane(pane, dir, amount);
+                let r = this.resize_pane(pane, dir, how);
                 cx.notify();
                 r
             });
             cx.run_until_parked();
             r
         };
+        let by = super::Resize::By;
+        let share = super::Resize::Share;
         let near = |(a, b): (f32, f32), (x, y): (f32, f32)| (a - x).abs() < 0.02 && (b - y).abs() < 0.02;
         assert!(near(weights(cx), (0.5, 0.5)), "{:?}", weights(cx));
         // p1's right divider moves right: p1 grows.
-        assert_eq!(resize("p1", "right", 0.1, cx), Ok(()));
+        assert_eq!(resize("p1", "right", by(0.1), cx), Ok(()));
         assert!(near(weights(cx), (0.6, 0.4)), "{:?}", weights(cx));
         // From p2, the same divider (its left one) moves left: p1 shrinks again.
-        assert_eq!(resize("p2", "left", 0.1, cx), Ok(()));
+        assert_eq!(resize("p2", "left", by(0.1), cx), Ok(()));
         assert!(near(weights(cx), (0.5, 0.5)), "{:?}", weights(cx));
         // Nothing right of p2: its left divider moves right instead, as in tmux.
-        assert_eq!(resize("p2", "right", 0.1, cx), Ok(()));
+        assert_eq!(resize("p2", "right", by(0.1), cx), Ok(()));
         assert!(near(weights(cx), (0.6, 0.4)), "{:?}", weights(cx));
+        // A share is absolute: p2 gets 72% of the two whatever they were, from either side.
+        assert_eq!(resize("p2", "left", share(0.72), cx), Ok(()));
+        assert!(near(weights(cx), (0.28, 0.72)), "{:?}", weights(cx));
+        assert_eq!(resize("p1", "right", share(0.5), cx), Ok(()));
+        assert!(near(weights(cx), (0.5, 0.5)), "{:?}", weights(cx));
+        // Before a paint (a fresh split), a share still sets two weights in proportion.
+        view.update(cx, |this, _| { this.bounds.borrow_mut().clear(); });
+        assert_eq!(view.update(cx, |this, _| this.resize_pane("p1", "right", share(0.3))), Ok(()));
+        assert!(near(weights(cx), (0.3, 0.7)), "{:?}", weights(cx));
+        assert!(view.update(cx, |this, _| this.resize_pane("p1", "right", by(0.1))).unwrap_err().contains("not been drawn"));
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
         // Pixels above 1; the sum of the weights is kept and p1 keeps its 24 px floor.
-        assert_eq!(resize("p1", "left", 1000.0, cx), Ok(()));
+        assert_eq!(resize("p1", "left", by(1000.0), cx), Ok(()));
         let (a, b) = weights(cx);
         assert!(a > 0.0 && a < 0.2 && (a + b - 1.0).abs() < 0.001, "{a} {b}");
         // No split runs up or down here.
-        assert!(resize("p1", "up", 0.1, cx).unwrap_err().contains("nothing beside"));
-        assert!(resize("nope", "left", 0.1, cx).unwrap_err().contains("no pane"));
+        assert!(resize("p1", "up", by(0.1), cx).unwrap_err().contains("nothing beside"));
+        assert!(resize("nope", "left", by(0.1), cx).unwrap_err().contains("no pane"));
         view.update(cx, |this, _| this.model.tab_mut("tb1").unwrap().zoomed = Some("p1".into()));
-        assert!(resize("p1", "right", 0.1, cx).unwrap_err().contains("zoomed"));
+        assert!(resize("p1", "right", by(0.1), cx).unwrap_err().contains("zoomed"));
     }
 
     #[test]
@@ -5914,20 +5983,25 @@ export default class Probe extends View {
     }
 
     #[test]
-    fn pane_resize_takes_a_direction_and_a_positive_amount() {
-        use super::resize_args;
+    fn pane_resize_takes_a_direction_and_a_positive_amount_or_a_share() {
+        use super::{Resize, resize_args};
         use serde_json::json;
         for dir in ["left", "right", "up", "down"] {
-            assert_eq!(resize_args(&json!({"direction": dir})), Ok((dir, 0.05)));
-            assert_eq!(resize_args(&json!({"direction": dir, "amount": null})), Ok((dir, 0.05)));
+            assert_eq!(resize_args(&json!({"direction": dir})), Ok((dir, Resize::By(0.05))));
+            assert_eq!(resize_args(&json!({"direction": dir, "amount": null})), Ok((dir, Resize::By(0.05))));
         }
-        assert_eq!(resize_args(&json!({"direction": "left", "amount": 0.1})), Ok(("left", 0.1)));
-        assert_eq!(resize_args(&json!({"direction": "down", "amount": 40})), Ok(("down", 40.0)));
+        assert_eq!(resize_args(&json!({"direction": "left", "amount": 0.1})), Ok(("left", Resize::By(0.1))));
+        assert_eq!(resize_args(&json!({"direction": "down", "amount": 40})), Ok(("down", Resize::By(40.0))));
+        assert_eq!(resize_args(&json!({"direction": "left", "share": 0.72})), Ok(("left", Resize::Share(0.72))));
         assert_eq!(resize_args(&json!({"direction": "sideways"})), Err("pane.resize direction is left, right, up or down, not \"sideways\"".into()));
         assert_eq!(resize_args(&json!({})), Err("pane.resize needs direction".into()));
-        assert_eq!(resize_args(&json!({"direction": "left", "amount": "lots"})), Err("pane.resize amount must be a number (a share up to 1, or px), not \"lots\"".into()));
+        assert_eq!(resize_args(&json!({"direction": "left", "amount": "lots"})), Err("pane.resize amount must be a number, not \"lots\"".into()));
+        assert_eq!(resize_args(&json!({"direction": "left", "amount": 0.1, "share": 0.5})), Err("pane.resize takes amount or share, not both".into()));
         for bad in [json!(0), json!(-0.2)] {
             assert!(resize_args(&json!({"direction": "left", "amount": bad})).unwrap_err().contains("above 0"), "{bad}");
+        }
+        for bad in [json!(-0.1), json!(1.5)] {
+            assert!(resize_args(&json!({"direction": "left", "share": bad})).unwrap_err().contains("between 0 and 1"), "{bad}");
         }
     }
 

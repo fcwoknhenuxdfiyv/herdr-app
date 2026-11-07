@@ -573,7 +573,9 @@ The main ones:
   in that direction, as tmux's resize-pane: `right` or `down` grows the pane before the
   divider. A pane with nothing on that side moves its opposite divider instead, so
   `left` on the rightmost pane still grows it. `amount` up to 1 is a share of the two
-  neighbors' combined length (default 0.05); above 1 it's logical pixels. Zoomed tabs
+  neighbors' combined length (default 0.05); above 1 it's logical pixels. `share` (0 to 1)
+  instead of `amount` places that divider so the pane has this share of the two neighbors'
+  room: absolute, and for weighted splits it needs no drawn geometry. Zoomed tabs
   refuse; `pane.zoom` first. Keys: `"alt-shift-l": "pane.resize:right"`. Only the
   shown tab resizes (its panes are measured on screen). For an absolute share, set the
   pane node's weight with `layout.resize {id: <pane>, weight}`: the neighbors in a split
