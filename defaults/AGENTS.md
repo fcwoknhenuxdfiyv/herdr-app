@@ -559,7 +559,7 @@ The main ones:
 - Panes: `pane.split {direction: "right" | "down", pane?, argv? | mod?, props?}` (a new
   terminal, or a mod pane), `pane.close {pane?}`,
   `pane.zoom {pane?}`, `pane.focus {pane | terminal}`, `pane.go {direction}`,
-  `pane.swap {pane?, direction | target}`.
+  `pane.swap {pane?, direction | target}`, `pane.resize {direction, amount?, pane?}`.
   `pane.go` prefers the most recently focused pane along the nearest edge in that
   direction; unvisited panes fall back to overlap, then top/left layout order.
   `pane.go` also reaches visible mods whose `mod.json` says `"focusable": true`, and
@@ -568,9 +568,18 @@ The main ones:
   `pane.swap {target}` trades the places of `pane` (default: the focused one) and
   `target`, another pane of the same tab; give `direction` or `target`, not both.
   A swap moves panes, not focus: the focused pane stays focused in its new place.
+  `pane.resize` moves the divider on that side of the pane (default: the focused one)
+  in that direction, as tmux's resize-pane: `right` or `down` grows the pane before the
+  divider. A pane with nothing on that side moves its opposite divider instead, so
+  `left` on the rightmost pane still grows it. `amount` up to 1 is a share of the two
+  neighbors' combined length (default 0.05); above 1 it's logical pixels. Zoomed tabs
+  refuse; `pane.zoom` first. Keys: `"alt-shift-l": "pane.resize:right"`. Only the
+  shown tab resizes (its panes are measured on screen). For an absolute share, set the
+  pane node's weight with `layout.resize {id: <pane>, weight}`: the neighbors in a split
+  share by weight (new splits give each half).
   `pane.focus {terminal}` prefers the first visible layout terminal block showing that
   address, then its model pane. Clicking a terminal block focuses it too.
-  While a layout terminal block is focused, implicit split/close/zoom/go/swap and
+  While a layout terminal block is focused, implicit split/close/zoom/go/swap/resize and
   `terminal.show` fail, as do `terminal.open`/`terminal.keep` with place right/down.
   They never act on the terminal's source pane. An explicit `pane` still targets that
   model pane; composition edits belong to the mod (edit its layout instead).

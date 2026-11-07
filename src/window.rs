@@ -2803,7 +2803,7 @@ impl AppWindow {
             if !args.is_object() { args = json!({}); }
             args["machine"] = json!(machine);
         }
-        if matches!(name, "space.new" | "space.close" | "space.rename" | "space.move" | "tab.new" | "tab.close" | "tab.rename" | "tab.move" | "pane.split" | "pane.close" | "pane.swap" | "terminal.keep" | "terminal.park") {
+        if matches!(name, "space.new" | "space.close" | "space.rename" | "space.move" | "tab.new" | "tab.close" | "tab.rename" | "tab.move" | "pane.split" | "pane.close" | "pane.swap" | "pane.resize" | "terminal.keep" | "terminal.park") {
             let node = ["id", "space", "pane"].into_iter().find_map(|k| Self::arg(&args, k));
             let target = node.and_then(|id| self.model.space(id).or_else(|| self.model.space_of(id))).or_else(|| self.model.active_space());
             let machine = if name == "space.new" { Self::arg(&args, "machine") }
@@ -3052,6 +3052,16 @@ impl AppWindow {
                     (SwapBy::Target(_), None) => Err("no pane to swap".into()),
                 };
                 if let Err(e) = r {
+                    return self.fail(e);
+                }
+            }
+            "pane.resize" => {
+                let (dir, amount) = match resize_args(a) {
+                    Ok(parsed) => parsed,
+                    Err(e) => return self.fail(e),
+                };
+                let Some(pane) = Self::owned(a, "pane").or_else(|| self.model.focused_pane()) else { return self.fail("no pane to resize") };
+                if let Err(e) = self.resize_pane(&pane, dir, amount) {
                     return self.fail(e);
                 }
             }
@@ -3419,6 +3429,10 @@ impl AppWindow {
         self.sync(window, cx);
     }
 
+    fn find_node(&self, id: &str) -> Option<&Node> {
+        self.chrome.find(id).or_else(|| self.model.tabs().find_map(|c| c.root.find(id)))
+    }
+
     fn find_node_mut(&mut self, id: &str) -> Option<&mut Node> {
         if self.chrome.find(id).is_some() {
             return self.chrome.find_mut(id);
@@ -3489,6 +3503,45 @@ impl AppWindow {
     fn swap_pane(&mut self, from: &str, explicit: bool, dir: &str) -> Result<(), String> {
         let neighbor = self.neighbor(from, dir, false);
         swap_with_neighbor(&mut self.model, from, explicit, neighbor)
+    }
+
+    /// `pane.resize`: moves the divider on `dir`'s side of `pane` (else the one on the
+    /// opposite side) by `amount`: a share of the two neighbors' combined length when
+    /// up to 1, else unzoomed px. Positive always moves the edge toward `dir`.
+    fn resize_pane(&mut self, pane: &str, dir: &str, amount: f32) -> Result<(), String> {
+        let Some(tab) = self.model.tab_of(pane).filter(|c| c.root.find(pane).is_some_and(Node::is_pane)) else {
+            return Err(format!("no pane {pane:?}"));
+        };
+        if !self.model.active_tab().is_some_and(|c| c.id == tab.id) {
+            return Err(format!("pane.resize needs a pane in the shown tab, not {pane:?}"));
+        }
+        if tab.zoomed.is_some() {
+            return Err("pane.resize: the tab is zoomed; unzoom it first (pane.zoom)".into());
+        }
+        let (axis, forward) = match dir {
+            "left" => (Axis::Row, false),
+            "right" => (Axis::Row, true),
+            "up" => (Axis::Column, false),
+            _ => (Axis::Column, true),
+        };
+        // The divider on that side, else the opposite one: a pane at the edge still resizes.
+        let Some((container, index)) = tab.root.boundary_toward(pane, axis, forward).or_else(|| tab.root.boundary_toward(pane, axis, !forward)) else {
+            return Err(format!("pane.resize: nothing beside {pane:?} to resize against in that direction"));
+        };
+        if !tab.root.find(&container).is_some_and(Node::resizable) {
+            return Err("pane.resize: the layout says this split is not resizable".into());
+        }
+        let Some((_, la, lb)) = self.divider_neighbors(&container, index) else {
+            return Err("pane.resize: the panes have not been drawn yet".into());
+        };
+        let zoom = settings::zoom();
+        let (la, lb) = (la / zoom, lb / zoom);
+        let step = if amount <= 1.0 { amount * (la + lb) } else { amount };
+        // The divider moves toward `dir` (as tmux's resize-pane): right or down grows
+        // the child before it, whichever side of it the pane is on.
+        let new_a = if forward { la + step } else { la - step };
+        self.resize_pair(&container, index, la, lb, new_a);
+        Ok(())
     }
 
     // ---- overlays ----------------------------------------------------------
@@ -4234,51 +4287,54 @@ impl AppWindow {
     fn drag_to(&mut self, pos: Point<Pixels>) {
         let Some(d) = &self.drag else { return };
         let (container, index, axis) = (d.container.clone(), d.index, d.axis);
-        let Some(node) = self.find_node_mut(&container).map(|n| n.clone()) else { return };
-        let shown: Vec<&Node> = node.children().iter().filter(|c| !c.hidden).collect();
-        let (Some(a), Some(b)) = (shown.get(index), shown.get(index + 1)) else { return };
-        let bounds = self.bounds.borrow();
-        let (Some(ba), Some(bb)) = (bounds.get(&a.id).copied(), bounds.get(&b.id).copied()) else { return };
-        drop(bounds);
-        let (start, end, p) = match axis {
-            Axis::Row => (f32::from(ba.left()), f32::from(bb.right()), f32::from(pos.x)),
-            Axis::Column => (f32::from(ba.top()), f32::from(bb.bottom()), f32::from(pos.y)),
-        };
-        let (la, lb) = match axis {
-            Axis::Row => (f32::from(ba.size.width), f32::from(bb.size.width)),
-            Axis::Column => (f32::from(ba.size.height), f32::from(bb.size.height)),
+        let Some((a, la, lb)) = self.divider_neighbors(&container, index) else { return };
+        let (start, p) = match axis {
+            Axis::Row => (f32::from(a.left()), f32::from(pos.x)),
+            Axis::Column => (f32::from(a.top()), f32::from(pos.y)),
         };
         // Measured on screen; sizes are stored as designed (unzoomed).
         let zoom = settings::zoom();
-        let (la, lb, start, end, p) = (la / zoom, lb / zoom, start / zoom, end / zoom, p / zoom);
+        self.resize_pair(&container, index, la / zoom, lb / zoom, (p - start) / zoom);
+    }
+
+    /// The two visible children of `container` around its divider `index`, as drawn:
+    /// the first's bounds, and both lengths along the container's axis (screen px).
+    fn divider_neighbors(&self, container: &str, index: usize) -> Option<(Bounds<Pixels>, f32, f32)> {
+        let node = self.find_node(container)?;
+        let shown: Vec<&Node> = node.children().iter().filter(|c| !c.hidden).collect();
+        let (a, b) = (shown.get(index)?, shown.get(index + 1)?);
+        let bounds = self.bounds.borrow();
+        let (ba, bb) = (*bounds.get(&a.id)?, *bounds.get(&b.id)?);
+        let (la, lb) = match node.axis()? {
+            Axis::Row => (f32::from(ba.size.width), f32::from(bb.size.width)),
+            Axis::Column => (f32::from(ba.size.height), f32::from(bb.size.height)),
+        };
+        Some((ba, la, lb))
+    }
+
+    /// Gives the child before divider `index` of `container` the length `new_a` of the
+    /// `la + lb` the two neighbors share (all unzoomed px): what a divider drag and
+    /// `pane.resize` both do. Neither side goes under 24 px or past the first's min/max.
+    fn resize_pair(&mut self, container: &str, index: usize, la: f32, lb: f32, new_a: f32) {
+        let Some(parent) = self.find_node_mut(container) else { return };
+        let Some(children) = parent.children_mut() else { return };
+        let shown: Vec<usize> = children.iter().enumerate().filter(|(_, c)| !c.hidden).map(|(i, _)| i).collect();
+        let (Some(&ia), Some(&ib)) = (shown.get(index), shown.get(index + 1)) else { return };
         let total = la + lb;
-        let mut new_a = (p - start).clamp(24.0, (end - start) - 24.0);
-        if let Some(min) = a.min {
+        let mut new_a = new_a.clamp(24.0, (total - 24.0).max(24.0));
+        if let Some(min) = children[ia].min {
             new_a = new_a.max(min);
         }
-        if let Some(max) = a.max {
+        if let Some(max) = children[ia].max {
             new_a = new_a.min(max);
         }
         let new_a = new_a.min(total - 24.0);
-        let (a_id, b_id) = (a.id.clone(), b.id.clone());
-        let (sa, sb) = (a.size, b.size);
-        let Some(parent) = self.find_node_mut(&container) else { return };
-        let Some(children) = parent.children_mut() else { return };
-        let set = |children: &mut Vec<Node>, id: &str, s: Span| {
-            if let Some(n) = children.iter_mut().find(|n| n.id == id) {
-                n.size = Some(s);
-            }
-        };
-        match (sa, sb) {
-            (Some(Span::Px { .. }), _) => set(children, &a_id, Span::Px { px: new_a.round() }),
-            (_, Some(Span::Px { .. })) => set(children, &b_id, Span::Px { px: (total - new_a).round() }),
-            _ => {
-                let wa = match sa { Some(Span::Weight { weight }) => weight, _ => 1.0 };
-                let wb = match sb { Some(Span::Weight { weight }) => weight, _ => 1.0 };
-                let sum = wa + wb;
-                set(children, &a_id, Span::Weight { weight: sum * new_a / total });
-                set(children, &b_id, Span::Weight { weight: sum * (total - new_a) / total });
-            }
+        let (sa, sb) = pair_sizes(children[ia].size, children[ib].size, total, new_a);
+        if let Some(sa) = sa {
+            children[ia].size = Some(sa);
+        }
+        if let Some(sb) = sb {
+            children[ib].size = Some(sb);
         }
     }
 
@@ -4610,6 +4666,40 @@ fn swap_with_neighbor(model: &mut Model, from: &str, explicit: bool, neighbor: O
     Ok(())
 }
 
+/// The sizes two neighbors get when the first is `new_a` of their `total` (unzoomed
+/// px): a fixed side stays fixed (the other follows the flex), two flexible sides
+/// share their weights in the new proportion. None: leave that side as it is.
+fn pair_sizes(sa: Option<Span>, sb: Option<Span>, total: f32, new_a: f32) -> (Option<Span>, Option<Span>) {
+    match (sa, sb) {
+        (Some(Span::Px { .. }), _) => (Some(Span::Px { px: new_a.round() }), None),
+        (_, Some(Span::Px { .. })) => (None, Some(Span::Px { px: (total - new_a).round() })),
+        _ => {
+            let wa = match sa { Some(Span::Weight { weight }) => weight, _ => 1.0 };
+            let wb = match sb { Some(Span::Weight { weight }) => weight, _ => 1.0 };
+            let sum = wa + wb;
+            (Some(Span::Weight { weight: sum * new_a / total }), Some(Span::Weight { weight: sum * (total - new_a) / total }))
+        }
+    }
+}
+
+/// `pane.resize`'s direction and amount: a share of the neighbors (up to 1) or px, positive.
+fn resize_args(args: &Value) -> Result<(&str, f32), String> {
+    let dir = match AppWindow::arg(args, "direction") {
+        Some(dir @ ("left" | "right" | "up" | "down")) => dir,
+        Some(dir) => return Err(format!("pane.resize direction is left, right, up or down, not {dir:?}")),
+        None => return Err("pane.resize needs direction".into()),
+    };
+    let amount = match args.get("amount") {
+        None | Some(Value::Null) => 0.05,
+        Some(Value::Number(n)) => n.as_f64().unwrap_or(0.0) as f32,
+        Some(other) => return Err(format!("pane.resize amount must be a number (a share up to 1, or px), not {other}")),
+    };
+    if !amount.is_finite() || amount <= 0.0 {
+        return Err(format!("pane.resize amount must be above 0, not {amount}"));
+    }
+    Ok((dir, amount))
+}
+
 fn swap_by(args: &Value) -> Result<SwapBy<'_>, String> {
     if args.get("direction").is_some_and(|d| !d.is_string() && !d.is_null()) {
         return Err("pane.swap direction must be a string (or null to omit it)".into());
@@ -4625,7 +4715,7 @@ fn swap_by(args: &Value) -> Result<SwapBy<'_>, String> {
 
 fn needs_model_pane(name: &str, args: &Value) -> bool {
     match name {
-        "pane.split" | "pane.close" | "pane.zoom" | "pane.swap" | "terminal.show" => AppWindow::arg(args, "pane").is_none(),
+        "pane.split" | "pane.close" | "pane.zoom" | "pane.swap" | "pane.resize" | "terminal.show" => AppWindow::arg(args, "pane").is_none(),
         "pane.go" => true,
         "terminal.open" | "terminal.keep" => matches!(AppWindow::arg(args, "place"), Some("right" | "down")),
         _ => false,
@@ -5428,6 +5518,67 @@ mod tests {
     }
 
     #[test]
+    fn pane_resize_moves_the_divider_on_the_pane_side_it_names() {
+        in_own_process("pane_resize_divider");
+    }
+
+    /// Two panes side by side: resizing moves the divider toward the direction, from
+    /// either side of it; a pane at the edge falls back to its other divider; a split
+    /// with nothing in that direction, and a zoomed tab, refuse.
+    #[gpui::test]
+    fn pane_resize_divider(cx: &mut gpui::TestAppContext) {
+        use crate::layout::Axis;
+        if !running_alone("pane_resize_divider") {
+            return;
+        }
+        let (view, cx) = open_window(cx, "unused", "", serde_json::json!({
+            "id": "root", "type": "block", "content": { "tab": "active" }
+        }));
+        cx.update(|window, cx| view.update(cx, |this, cx| {
+            this.model.add_space("sp1", "", "/tmp", crate::model::Tab::new("tb1", "", "p1", "t1"));
+            this.model.split("p1", Axis::Row, "p2", "t2");
+            this.model.focus_pane("p1");
+            this.sync(window, cx);
+        }));
+        cx.run_until_parked();
+        let weight = |this: &super::AppWindow, pane: &str| match this.model.tab("tb1").unwrap().root.find(pane).unwrap().size {
+            Some(super::Span::Weight { weight }) => weight,
+            other => panic!("{pane} has no weight: {other:?}"),
+        };
+        let weights = |cx: &mut gpui::VisualTestContext| view.update(cx, |this, _| (weight(this, "p1"), weight(this, "p2")));
+        // Each step is drawn before the next: the divider's neighbors are measured on screen.
+        let resize = |pane: &str, dir: &str, amount: f32, cx: &mut gpui::VisualTestContext| {
+            let r = view.update(cx, |this, cx| {
+                let r = this.resize_pane(pane, dir, amount);
+                cx.notify();
+                r
+            });
+            cx.run_until_parked();
+            r
+        };
+        let near = |(a, b): (f32, f32), (x, y): (f32, f32)| (a - x).abs() < 0.02 && (b - y).abs() < 0.02;
+        assert!(near(weights(cx), (0.5, 0.5)), "{:?}", weights(cx));
+        // p1's right divider moves right: p1 grows.
+        assert_eq!(resize("p1", "right", 0.1, cx), Ok(()));
+        assert!(near(weights(cx), (0.6, 0.4)), "{:?}", weights(cx));
+        // From p2, the same divider (its left one) moves left: p1 shrinks again.
+        assert_eq!(resize("p2", "left", 0.1, cx), Ok(()));
+        assert!(near(weights(cx), (0.5, 0.5)), "{:?}", weights(cx));
+        // Nothing right of p2: its left divider moves right instead, as in tmux.
+        assert_eq!(resize("p2", "right", 0.1, cx), Ok(()));
+        assert!(near(weights(cx), (0.6, 0.4)), "{:?}", weights(cx));
+        // Pixels above 1; the sum of the weights is kept and p1 keeps its 24 px floor.
+        assert_eq!(resize("p1", "left", 1000.0, cx), Ok(()));
+        let (a, b) = weights(cx);
+        assert!(a > 0.0 && a < 0.2 && (a + b - 1.0).abs() < 0.001, "{a} {b}");
+        // No split runs up or down here.
+        assert!(resize("p1", "up", 0.1, cx).unwrap_err().contains("nothing beside"));
+        assert!(resize("nope", "left", 0.1, cx).unwrap_err().contains("no pane"));
+        view.update(cx, |this, _| this.model.tab_mut("tb1").unwrap().zoomed = Some("p1".into()));
+        assert!(resize("p1", "right", 0.1, cx).unwrap_err().contains("zoomed"));
+    }
+
+    #[test]
     fn a_second_rename_press_closes_the_prompt() {
         in_own_process("rename_prompt_opens_once");
     }
@@ -5719,13 +5870,44 @@ export default class Probe extends View {
     }
 
     #[test]
+    fn two_flexible_neighbors_share_their_weights_and_a_fixed_side_stays_fixed() {
+        use super::{Span, pair_sizes};
+        // Equal weights, the divider moved to 3/4: the weights' sum is kept.
+        let (a, b) = pair_sizes(None, None, 400.0, 300.0);
+        assert_eq!((a, b), (Some(Span::Weight { weight: 1.5 }), Some(Span::Weight { weight: 0.5 })));
+        let (a, b) = pair_sizes(Some(Span::Weight { weight: 2.0 }), Some(Span::Weight { weight: 6.0 }), 400.0, 100.0);
+        assert_eq!((a, b), (Some(Span::Weight { weight: 2.0 }), Some(Span::Weight { weight: 6.0 })));
+        // A fixed side is sized in px and the flexible one is left alone.
+        assert_eq!(pair_sizes(Some(Span::Px { px: 240.0 }), None, 1000.0, 300.4), (Some(Span::Px { px: 300.0 }), None));
+        assert_eq!(pair_sizes(None, Some(Span::Px { px: 368.0 }), 1000.0, 600.0), (None, Some(Span::Px { px: 400.0 })));
+    }
+
+    #[test]
+    fn pane_resize_takes_a_direction_and_a_positive_amount() {
+        use super::resize_args;
+        use serde_json::json;
+        for dir in ["left", "right", "up", "down"] {
+            assert_eq!(resize_args(&json!({"direction": dir})), Ok((dir, 0.05)));
+            assert_eq!(resize_args(&json!({"direction": dir, "amount": null})), Ok((dir, 0.05)));
+        }
+        assert_eq!(resize_args(&json!({"direction": "left", "amount": 0.1})), Ok(("left", 0.1)));
+        assert_eq!(resize_args(&json!({"direction": "down", "amount": 40})), Ok(("down", 40.0)));
+        assert_eq!(resize_args(&json!({"direction": "sideways"})), Err("pane.resize direction is left, right, up or down, not \"sideways\"".into()));
+        assert_eq!(resize_args(&json!({})), Err("pane.resize needs direction".into()));
+        assert_eq!(resize_args(&json!({"direction": "left", "amount": "lots"})), Err("pane.resize amount must be a number (a share up to 1, or px), not \"lots\"".into()));
+        for bad in [json!(0), json!(-0.2)] {
+            assert!(resize_args(&json!({"direction": "left", "amount": bad})).unwrap_err().contains("above 0"), "{bad}");
+        }
+    }
+
+    #[test]
     fn composition_commands_never_default_to_a_source_pane() {
         use serde_json::json;
-        for name in ["pane.split", "pane.close", "pane.zoom", "pane.go", "pane.swap", "terminal.show"] {
+        for name in ["pane.split", "pane.close", "pane.zoom", "pane.go", "pane.swap", "pane.resize", "terminal.show"] {
             assert!(super::needs_model_pane(name, &json!({})), "{name}");
             assert!(super::needs_model_pane(name, &json!({"pane": null})), "{name}");
         }
-        for name in ["pane.split", "pane.close", "pane.zoom", "pane.swap", "terminal.show"] {
+        for name in ["pane.split", "pane.close", "pane.zoom", "pane.swap", "pane.resize", "terminal.show"] {
             assert!(!super::needs_model_pane(name, &json!({"pane": "explicit-pane"})), "{name}");
         }
         assert!(super::needs_model_pane("pane.go", &json!({"pane": "explicit-pane"})));

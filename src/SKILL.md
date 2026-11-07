@@ -75,6 +75,16 @@ the same tab. Give `direction` or `target`, not both. Focus stays with the same 
 herdr-app do pane.swap '{"pane":"p12","target":"p14"}'
 ```
 
+`pane.resize {direction, amount?, pane?}` moves the divider on that side of `pane`
+(default: the focused one) in that direction, as tmux's resize-pane; a pane with
+nothing on that side moves its opposite divider instead. `amount` up to 1 is a share
+of the two neighbors' combined length (default 0.05); above 1 it's logical pixels.
+It works on the shown tab only and refuses while the tab is zoomed:
+
+```sh
+herdr-app do pane.resize '{"direction":"right","amount":0.1}'
+```
+
 `terminal.search` opens a find bar in the focused terminal. It searches that
 terminal's screen and scrollback; Enter and Shift-Enter move between matches,
 Escape closes the bar while its find field has focus, and each terminal keeps its own query (reopening selects it, so typing replaces it).

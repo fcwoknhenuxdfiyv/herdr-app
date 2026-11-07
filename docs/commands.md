@@ -265,6 +265,16 @@ Swap a pane (default: the focused one) with its neighbor in a direction, or with
 | `pane` | no |
 | `target` | no |
 
+## `pane.resize`
+
+Move a pane's edge (default: the focused pane's) "left", "right", "up" or "down": the divider on that side, else the one on the opposite side, so a pane at the tab's edge still resizes. amount up to 1 is a share of the two neighbors' combined length (default 0.05); above 1, logical pixels.
+
+| Argument | Required |
+|---|---|
+| `direction` | yes |
+| `amount` | no |
+| `pane` | no |
+
 ## `terminal.peek`
 
 Peek at a running terminal over the tab, with keep-as-tab and close controls.

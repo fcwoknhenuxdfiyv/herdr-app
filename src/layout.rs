@@ -646,6 +646,30 @@ impl Node {
         }
         true
     }
+
+    /// The divider that bounds `id` on one side: the nearest ancestor running along
+    /// `axis` where the subtree holding `id` has a visible sibling after it (`forward`,
+    /// the right or bottom side) or before it. Returns the container's id and the
+    /// index, among its visible children, of the child before the divider. None when
+    /// nothing is on that side (the pane touches the tree's edge there).
+    pub fn boundary_toward(&self, id: &str, axis: Axis, forward: bool) -> Option<(String, usize)> {
+        let path = self.path_to(id)?;
+        for (depth, container_id) in path.iter().enumerate().rev().skip(1) {
+            let container = self.find(container_id)?;
+            if container.axis() != Some(axis) {
+                continue;
+            }
+            let visible: Vec<&Node> = container.children().iter().filter(|c| !c.hidden).collect();
+            let i = visible.iter().position(|c| c.id == path[depth + 1])?;
+            if forward && i + 1 < visible.len() {
+                return Some((container.id.clone(), i));
+            }
+            if !forward && i > 0 {
+                return Some((container.id.clone(), i - 1));
+            }
+        }
+        None
+    }
 }
 
 fn active_child<'a>(children: &'a [Node], active: Option<&str>) -> Option<&'a Node> {
@@ -888,5 +912,41 @@ mod tests {
         let ids: Vec<_> = n.children().iter().map(|c| c.id.clone()).collect();
         assert_eq!(ids, ["c", "b", "a"]);
         assert_eq!(n.children()[0].size, Some(Size::Px { px: 100.0 }));
+    }
+
+    #[test]
+    fn a_pane_finds_the_divider_on_each_side_through_nested_splits() {
+        // row(a, column(b, c), d): b's left edge is the row's first divider, its
+        // bottom edge the column's divider, and nothing is above it.
+        let n = Node::container("tab", Axis::Row, vec![term("a"), Node::container("col", Axis::Column, vec![term("b"), term("c")]), term("d")]);
+        let on = |id: &str, axis, forward| n.boundary_toward(id, axis, forward);
+        assert_eq!(on("b", Axis::Row, false), Some(("tab".into(), 0)));
+        assert_eq!(on("b", Axis::Row, true), Some(("tab".into(), 1)));
+        assert_eq!(on("b", Axis::Column, true), Some(("col".into(), 0)));
+        assert_eq!(on("b", Axis::Column, false), None);
+        assert_eq!(on("c", Axis::Column, false), Some(("col".into(), 0)));
+        assert_eq!(on("c", Axis::Column, true), None);
+        // The outer panes touch the tab's edges on one side.
+        assert_eq!(on("a", Axis::Row, false), None);
+        assert_eq!(on("a", Axis::Row, true), Some(("tab".into(), 0)));
+        assert_eq!(on("d", Axis::Row, true), None);
+        assert_eq!(on("d", Axis::Row, false), Some(("tab".into(), 1)));
+        assert_eq!(on("a", Axis::Column, true), None);
+        // A lone pane, the root itself and unknown ids have no divider.
+        let lone = Node::container("tab", Axis::Row, vec![term("only")]);
+        assert_eq!(lone.boundary_toward("only", Axis::Row, true), None);
+        assert_eq!(lone.boundary_toward("only", Axis::Column, false), None);
+        assert_eq!(n.boundary_toward("tab", Axis::Row, true), None);
+        assert_eq!(n.boundary_toward("nope", Axis::Row, true), None);
+    }
+
+    #[test]
+    fn dividers_skip_hidden_siblings() {
+        let mut n = Node::container("tab", Axis::Row, vec![term("a"), term("b"), term("c")]);
+        n.find_mut("b").unwrap().hidden = true;
+        // With b hidden, a and c are neighbors across the row's only visible divider.
+        assert_eq!(n.boundary_toward("a", Axis::Row, true), Some(("tab".into(), 0)));
+        assert_eq!(n.boundary_toward("c", Axis::Row, false), Some(("tab".into(), 0)));
+        assert_eq!(n.boundary_toward("b", Axis::Row, true), None);
     }
 }
