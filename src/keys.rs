@@ -269,6 +269,9 @@ pub fn install(bindings: Vec<KeyBinding>, cx: &mut App) {
         KeyBinding::new(ESCAPE_HATCH, ShellAction::new("app.reset"), None),
         KeyBinding::new("escape", ShellAction::new("overlay.close"), Some("Overlay")),
     ]);
+    // The menu bar shows each item's shortcut as of when it was set.
+    #[cfg(target_os = "macos")]
+    crate::macos::menus(cx);
 }
 
 #[cfg(test)]
