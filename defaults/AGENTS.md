@@ -77,6 +77,7 @@ first frame or during GPU recovery it reports an error instead of a PNG.
 |---|---|---|
 | `layouts/<name>.json` | the window and its whole look: blocks, theme, fonts, backgrounds, pane frames; one file per layout (`main`, `terminals`, `win98`, any you add) | live |
 | `keys.json` | what every key does | live |
+| `menus.json` | the macOS menu bar after the Herdr menu: menus of app and mod commands (shortcuts come from `keys.json`) | live |
 | `settings.json` | the person: zoom, sounds, fonts for every layout | live |
 | `mods/<name>/` | panels: small JavaScript programs | live (hot reload) |
 | `programs.json` | how programs show (name, icon, tile), on top of the built-in table | live |
@@ -523,6 +524,26 @@ shortcuts must then be added by hand.
   has focus. Clicking the terminal puts typing, including Escape, back in the program;
   the bar and its matches stay.
   Each terminal keeps its own query, and reopening selects it so typing replaces it. Search covers the screen and scrollback without replacing text selection.
+
+## Menus (macOS): `menus.json`
+
+The menu bar after the Herdr menu (Settings, Services, Hide, Quit, which stay). Each
+menu lists items that run a command, `"-"` separators, and submenus; the shortcut shown
+beside an item is whatever `keys.json` binds to its command, so there are none in the
+file. Without a `menus.json`, Herdr's default menus show (Edit, View, Window, Help).
+Edits apply live; a broken file keeps the menus as they were and says why in
+`menus.error`. Mods' commands work as in keys (`"tmux.balance"`); only macOS draws a
+menu bar, other systems just check the file.
+
+```json
+[
+  { "name": "Tab", "items": [
+    { "name": "New Tab…", "command": "tmux.new-tab" },
+    { "name": "Next Tab", "command": "tab.next" },
+    "-",
+    { "name": "Go to Tab", "items": [ { "name": "Tab 1", "command": "tab.select:1" } ] } ] }
+]
+```
 
 ## Commands
 

@@ -1,0 +1,27 @@
+[
+  { "name": "Edit", "items": [
+    { "name": "Copy", "command": "terminal.copy" },
+    { "name": "Paste", "command": "terminal.paste" },
+    "-",
+    { "name": "Find…", "command": "terminal.search" }
+  ] },
+  { "name": "View", "items": [
+    { "name": "Command Palette…", "command": "app.palette" },
+    { "name": "Go to Tab…", "command": "mod.open:picker" },
+    { "name": "Toggle Sidebar", "command": "layout.toggle:sidebar" },
+    { "name": "Next Layout", "command": "layout.switch" },
+    "-",
+    { "name": "Zoom In", "command": "app.zoom_in" },
+    { "name": "Zoom Out", "command": "app.zoom_out" },
+    { "name": "Actual Size", "command": "app.zoom_reset" }
+  ] },
+  { "name": "Window", "items": [
+    { "name": "Minimize", "command": "window.minimize" },
+    { "name": "Zoom", "command": "window.maximize" }
+  ] },
+  { "name": "Help", "items": [
+    { "name": "Keyboard Shortcuts", "command": "app.help" },
+    { "name": "What's New", "command": "app.whats_new" },
+    { "name": "Send Feedback…", "command": "app.feedback" }
+  ] }
+]

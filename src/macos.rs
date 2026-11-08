@@ -9,51 +9,50 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
     cx.on_action(|_: &Settings, _| crate::mods::request(crate::mods::Request::Run { name: "app.settings".into(), args: serde_json::Value::Null }));
-    menus(cx);
+    // A broken menus.json still gets the person the default menus; the window reports it.
+    if crate::menus::apply(cx).is_err() {
+        menus(cx, &crate::menus::parse(crate::menus::DEFAULT).unwrap_or_default());
+    }
 }
 
-/// The menu bar. Items run app commands (the window's `ShellAction` handler, as a key
-/// would); the shortcut shown beside each is whatever keys.json binds to it, read from
-/// the keymap when the menus are set, so `keys::install` sets them again after every reload.
-pub fn menus(cx: &mut App) {
-    let run = |name: &'static str, command: &'static str| MenuItem::action(name, ShellAction::new(command));
-    cx.set_menus([
-        Menu::new("Herdr").items([
-            MenuItem::action("Settings…", Settings),
-            MenuItem::separator(),
-            MenuItem::os_submenu("Services", SystemMenuType::Services),
-            MenuItem::separator(),
-            MenuItem::action("Hide Herdr", Hide),
-            MenuItem::action("Hide Others", HideOthers),
-            MenuItem::action("Show All", ShowAll),
-            MenuItem::separator(),
-            MenuItem::action("Quit Herdr", Quit),
-        ]),
-        Menu::new("Edit").items([
-            run("Copy", "terminal.copy"),
-            run("Paste", "terminal.paste"),
-            MenuItem::separator(),
-            run("Find…", "terminal.search"),
-        ]),
-        Menu::new("View").items([
-            run("Command Palette…", "app.palette"),
-            run("Toggle Sidebar", "layout.toggle:sidebar"),
-            run("Next Layout", "layout.switch"),
-            MenuItem::separator(),
-            run("Zoom In", "app.zoom_in"),
-            run("Zoom Out", "app.zoom_out"),
-            run("Actual Size", "app.zoom_reset"),
-        ]),
-        Menu::new("Window").items([
-            run("Minimize", "window.minimize"),
-            run("Zoom", "window.maximize"),
-        ]),
-        Menu::new("Help").items([
-            run("Keyboard Shortcuts", "app.help"),
-            run("What's New", "app.whats_new"),
-            run("Send Feedback…", "app.feedback"),
-        ]),
-    ]);
+/// The menu bar: the app's own menu, then `menus` (menus.json). Items run app and mod
+/// commands as a key would (the window's `ShellAction` handler); the shortcut shown
+/// beside each is whatever keys.json binds to its command, read from the keymap when
+/// the menus are set, so this runs again after every keys.json or menus.json reload.
+pub fn menus(cx: &mut App, menus: &[crate::menus::Menu]) {
+    let mut all = vec![Menu::new("Herdr").items([
+        MenuItem::action("Settings…", Settings),
+        MenuItem::separator(),
+        MenuItem::os_submenu("Services", SystemMenuType::Services),
+        MenuItem::separator(),
+        MenuItem::action("Hide Herdr", Hide),
+        MenuItem::action("Hide Others", HideOthers),
+        MenuItem::action("Show All", ShowAll),
+        MenuItem::separator(),
+        MenuItem::action("Quit Herdr", Quit),
+    ])];
+    all.extend(menus.iter().map(menu));
+    cx.set_menus(all);
+}
+
+fn menu(m: &crate::menus::Menu) -> Menu {
+    Menu::new(m.name.clone()).items(m.items.iter().map(item))
+}
+
+fn item(i: &crate::menus::Item) -> MenuItem {
+    use crate::menus::Item;
+    match i {
+        Item::Separator => MenuItem::separator(),
+        Item::Submenu(m) => MenuItem::submenu(menu(m)),
+        Item::Command { name, command } => MenuItem::Action {
+            name: name.clone().into(),
+            // Native where the key bindings use a native action too, so the shortcut matches.
+            action: action(command).unwrap_or_else(|| Box::new(ShellAction::new(command.clone()))),
+            os_action: None,
+            checked: false,
+            disabled: false,
+        },
+    }
 }
 
 pub fn action(name: &str) -> Option<Box<dyn Action>> {

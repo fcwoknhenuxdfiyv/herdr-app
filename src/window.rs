@@ -342,6 +342,7 @@ struct Watched {
     settings: Option<SystemTime>,
     keys: Option<SystemTime>,
     programs: Option<SystemTime>,
+    menus: Option<SystemTime>,
 }
 
 pub struct AppWindow {
@@ -901,6 +902,16 @@ impl AppWindow {
             }
             self.watched.programs = p_time;
             self.publish(cx);
+        }
+        let m_time = mtime(&crate::menus::path());
+        if m_time != self.watched.menus {
+            match crate::menus::apply(cx) {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(file("menus.error"));
+                }
+                Err(e) => self.report("menus", &e),
+            }
+            self.watched.menus = m_time;
         }
     }
 
