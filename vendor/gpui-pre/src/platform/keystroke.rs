@@ -54,6 +54,23 @@ pub enum OptionSide {
     Both,
 }
 
+#[cfg(target_os = "macos")]
+thread_local! {
+    static OPTION_SHORTCUTS: std::cell::Cell<Option<OptionSide>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(target_os = "macos")]
+#[expect(missing_docs)]
+pub fn set_option_shortcuts(side: Option<OptionSide>) {
+    OPTION_SHORTCUTS.with(|value| value.set(side));
+}
+
+#[cfg(target_os = "macos")]
+#[expect(missing_docs)]
+pub fn option_shortcuts() -> Option<OptionSide> {
+    OPTION_SHORTCUTS.with(|value| value.get())
+}
+
 // Physical Option metadata must not change keybinding identity.
 impl PartialEq for Keystroke {
     fn eq(&self, other: &Self) -> bool {
@@ -125,6 +142,14 @@ impl Keystroke {
     /// This method assumes that `self` was typed and `target' is in the keymap, and checks
     /// both possibilities for self against the target.
     pub fn should_match(&self, target: &KeybindingKeystroke) -> bool {
+        #[cfg(target_os = "macos")]
+        if target.inner.modifiers.alt
+            && let Some(required) = option_shortcuts()
+            && self.option_side != Some(required)
+            && self.option_side != Some(OptionSide::Both)
+        {
+            return false;
+        }
         #[cfg(not(target_os = "windows"))]
         if let Some(key_char) = self
             .key_char
@@ -324,6 +349,12 @@ impl Keystroke {
 }
 
 impl KeybindingKeystroke {
+    #[cfg(target_os = "macos")]
+    #[expect(missing_docs)]
+    pub fn supports_native_key_equivalent(&self) -> bool {
+        !self.inner.modifiers.alt || option_shortcuts().is_none()
+    }
+
     #[cfg(target_os = "windows")]
     #[expect(missing_docs)]
     pub fn new(inner: Keystroke, display_modifiers: Modifiers, display_key: String) -> Self {

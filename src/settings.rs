@@ -378,6 +378,7 @@ pub struct Person {
     pub font: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<f32>,
+    pub tab_min_width: f32,
     /// Enable programming ligatures in terminal fonts.
     pub font_ligatures: bool,
     /// The panels' font (their sizes follow zoom).
@@ -397,6 +398,8 @@ pub struct Person {
     /// macOS Option sends Alt shortcuts, or follows the keyboard layout.
     #[serde(skip_serializing_if = "OptionAsAlt::is_auto")]
     pub option_as_alt: OptionAsAlt,
+    #[serde(skip_serializing_if = "OptionShortcuts::is_both")]
+    pub option_shortcuts: OptionShortcuts,
     /// Light or dark: the system's, or one always.
     #[serde(skip_serializing_if = "Appearance::is_system")]
     pub appearance: Appearance,
@@ -438,6 +441,21 @@ impl OptionAsAlt {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OptionShortcuts {
+    #[default]
+    Both,
+    Left,
+    Right,
+}
+
+impl OptionShortcuts {
+    fn is_both(&self) -> bool {
+        *self == Self::Both
+    }
+}
+
 fn is_true(b: &bool) -> bool {
     *b
 }
@@ -450,6 +468,7 @@ impl Default for Person {
             core: None,
             font: None,
             font_size: None,
+            tab_min_width: 150.0,
             font_ligatures: false,
             ui_font: None,
             telemetry: true,
@@ -457,6 +476,7 @@ impl Default for Person {
             pane_scrollbars: true,
             minimum_contrast: 1.0,
             option_as_alt: OptionAsAlt::Auto,
+            option_shortcuts: OptionShortcuts::Both,
             appearance: Appearance::System,
             theme: None,
             colors: BTreeMap::new(),
@@ -471,6 +491,7 @@ impl Default for Person {
 pub struct Settings {
     pub font_family: String,
     pub font_size: f32,
+    pub tab_min_width: f32,
     pub font_ligatures: bool,
     pub ui_font_family: String,
     pub ui_font_size: f32,
@@ -494,6 +515,7 @@ pub struct Settings {
     pub clipboard_write: bool,
     pub minimum_contrast: f32,
     pub option_as_alt: OptionAsAlt,
+    pub option_shortcuts: OptionShortcuts,
     pub sounds: Sounds,
 }
 
@@ -521,6 +543,7 @@ impl Default for Settings {
         Settings {
             font_family: DEFAULT_FONT.into(),
             font_size: 14.0,
+            tab_min_width: 150.0,
             font_ligatures: false,
             ui_font_family: "Geist".into(),
             ui_font_size: 13.0,
@@ -536,6 +559,7 @@ impl Default for Settings {
             clipboard_write: true,
             minimum_contrast: 1.0,
             option_as_alt: OptionAsAlt::Auto,
+            option_shortcuts: OptionShortcuts::Both,
             sounds: Sounds::default(),
         }
     }
@@ -559,6 +583,7 @@ impl Settings {
             // The layout's own, else the person's, else Herdr's.
             font_family: look.font.clone().or(person.font.clone()).unwrap_or(d.font_family),
             font_size: look.font_size.or(person.font_size).unwrap_or(d.font_size),
+            tab_min_width: person.tab_min_width,
             font_ligatures: person.font_ligatures,
             ui_font_family: look.ui_font.clone().or(person.ui_font.clone()).unwrap_or(d.ui_font_family),
             ui_font_size: d.ui_font_size,
@@ -575,6 +600,7 @@ impl Settings {
             clipboard_write: person.clipboard_write,
             minimum_contrast: person.minimum_contrast,
             option_as_alt: person.option_as_alt,
+            option_shortcuts: person.option_shortcuts,
         }
     }
 }
@@ -621,6 +647,9 @@ impl Settings {
         }
         if !(1.0..=21.0).contains(&self.minimum_contrast) {
             out.push(format!("minimum_contrast {} is outside 1..21", self.minimum_contrast));
+        }
+        if !(0.0..=400.0).contains(&self.tab_min_width) {
+            out.push(format!("tab_min_width {} is outside 0..400", self.tab_min_width));
         }
         if !(6.0..=72.0).contains(&self.font_size) {
             out.push(format!("font_size {} is outside 6..72", self.font_size));
@@ -671,6 +700,9 @@ pub fn load_person() -> Result<Person, String> {
     if !(ZOOM_MIN..=ZOOM_MAX).contains(&person.zoom) {
         return Err(format!("zoom {} is outside {ZOOM_MIN}..{ZOOM_MAX}", person.zoom));
     }
+    if !(0.0..=400.0).contains(&person.tab_min_width) {
+        return Err(format!("tab_min_width {} is outside 0..400", person.tab_min_width));
+    }
     Ok(person)
 }
 
@@ -692,6 +724,12 @@ pub fn write_person(person: &Person) -> std::io::Result<()> {
 
 /// Installs new settings; returns whether anything changed.
 pub fn set(s: Settings) -> bool {
+    #[cfg(target_os = "macos")]
+    gpui::set_option_shortcuts(match s.option_shortcuts {
+        OptionShortcuts::Both => None,
+        OptionShortcuts::Left => Some(gpui::OptionSide::Left),
+        OptionShortcuts::Right => Some(gpui::OptionSide::Right),
+    });
     #[cfg(target_os = "macos")]
     gpui_macos::set_option_as_alt(match s.option_as_alt {
         OptionAsAlt::Auto => None,
@@ -891,6 +929,39 @@ mod tests {
             assert_eq!(serde_json::to_value(settings).unwrap()["option_as_alt"], value);
         }
         assert!(serde_json::from_value::<Person>(serde_json::json!({"option_as_alt": "invalid"})).is_err());
+    }
+
+    #[test]
+    fn minimum_tab_width_defaults_and_validates() {
+        let default: Person = serde_json::from_str("{}").unwrap();
+        assert_eq!(default.tab_min_width, 150.0);
+        assert_eq!(Settings::default().tab_min_width, 150.0);
+        for width in [0.0, 80.0, 100.0, 125.5, 400.0, -1.0, 401.0] {
+            let person: Person = serde_json::from_value(serde_json::json!({"tab_min_width": width})).unwrap();
+            let settings = Settings::compose(&person, &crate::layout::Look::default(), true);
+            assert_eq!(settings.tab_min_width, width);
+            assert_eq!(serde_json::to_value(person).unwrap()["tab_min_width"], serde_json::json!(width));
+            assert_eq!(settings.problems().is_empty(), (0.0..=400.0).contains(&width));
+        }
+        assert!(serde_json::from_value::<Person>(serde_json::json!({"tab_min_width": "wide"})).is_err());
+    }
+
+    #[test]
+    fn option_shortcuts_defaults_to_both_and_round_trips() {
+        let default: Person = serde_json::from_str("{}").unwrap();
+        assert_eq!(default.option_shortcuts, OptionShortcuts::Both);
+        assert_eq!(Settings::default().option_shortcuts, OptionShortcuts::Both);
+        assert!(serde_json::to_value(default).unwrap().get("option_shortcuts").is_none());
+        for (value, expected) in [("both", OptionShortcuts::Both), ("left", OptionShortcuts::Left), ("right", OptionShortcuts::Right)] {
+            let person: Person = serde_json::from_value(serde_json::json!({"option_shortcuts": value})).unwrap();
+            let settings = Settings::compose(&person, &crate::layout::Look::default(), true);
+            assert_eq!(settings.option_shortcuts, expected);
+            assert_eq!(settings.option_as_alt, OptionAsAlt::Auto);
+            assert_eq!(serde_json::to_value(settings).unwrap()["option_shortcuts"], value);
+            let restored: Person = serde_json::from_value(serde_json::to_value(person).unwrap()).unwrap();
+            assert_eq!(restored.option_shortcuts, expected);
+        }
+        assert!(serde_json::from_value::<Person>(serde_json::json!({"option_shortcuts": "invalid"})).is_err());
     }
 
     #[test]

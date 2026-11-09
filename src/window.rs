@@ -851,7 +851,13 @@ impl AppWindow {
         if !problems.is_empty() {
             self.report_layout(&problems.join("; "));
         }
+        #[cfg(target_os = "macos")]
+        let option_shortcuts_changed = settings::get().option_shortcuts != s.option_shortcuts;
         if settings::set(s) {
+            #[cfg(target_os = "macos")]
+            if option_shortcuts_changed {
+                crate::menus::refresh(cx);
+            }
             for term in self.terms.values() {
                 term.view.read(cx).refresh_theme();
             }
@@ -5534,6 +5540,70 @@ mod tests {
         let (view, cx) = cx.add_window_view(|window, cx| super::AppWindow::new(crate::hc::offline(), requests, window, cx));
         assert_eq!(view.update(cx, |this, _| this.layout_name.clone()), "test");
         (view, cx)
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn option_shortcut_settings_apply_to_window_dispatch() {
+        in_own_process("option_shortcut_window");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn option_shortcut_window(cx: &mut gpui::TestAppContext) {
+        use gpui::{Keystroke, OptionSide};
+        use crate::settings::{OptionAsAlt, OptionShortcuts};
+        use serde_json::json;
+        if !running_alone("option_shortcut_window") {
+            return;
+        }
+        let (view, cx) = open_window(cx, "unused", "", json!({
+            "id": "root", "type": "row", "children": [
+                { "id": "sidebar", "type": "block", "content": { "mod": "unused" } },
+                { "id": "main", "type": "block", "content": { "tab": "active" } }
+            ]
+        }));
+        cx.update(|window, cx| view.update(cx, |this, cx| {
+            this.model.add_space("sp1", "", "/tmp", crate::model::Tab::new("tb1", "", "p1", "t1"));
+            this.person.option_as_alt = OptionAsAlt::Left;
+            this.person.option_shortcuts = OptionShortcuts::Left;
+            this.apply_look(window, cx);
+            let bindings = crate::keys::parse(r#"{"global":{"alt-h":"layout.toggle:sidebar"}}"#).unwrap();
+            crate::keys::install(bindings, cx);
+            this.sync(window, cx);
+        }));
+        cx.run_until_parked();
+        let press = |side, cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| {
+                window.dispatch_keystroke(Keystroke {
+                    option_side: Some(side), key_char: Some("˙".into()),
+                    ..Keystroke::parse("alt-h").unwrap()
+                }, cx);
+            });
+            cx.run_until_parked();
+        };
+        let hidden = |cx: &mut gpui::VisualTestContext| view.update(cx, |this, _| this.chrome.find("sidebar").unwrap().hidden);
+        assert!(!hidden(cx));
+        press(OptionSide::Right, cx);
+        assert!(!hidden(cx));
+        press(OptionSide::Left, cx);
+        assert!(hidden(cx));
+        cx.update(|window, cx| view.update(cx, |this, cx| {
+            this.person.option_shortcuts = OptionShortcuts::Right;
+            this.apply_look(window, cx);
+        }));
+        press(OptionSide::Left, cx);
+        assert!(hidden(cx));
+        press(OptionSide::Right, cx);
+        assert!(!hidden(cx));
+        cx.update(|window, cx| view.update(cx, |this, cx| {
+            this.person.option_shortcuts = OptionShortcuts::Both;
+            this.apply_look(window, cx);
+        }));
+        press(OptionSide::Left, cx);
+        assert!(hidden(cx));
+        press(OptionSide::Right, cx);
+        assert!(!hidden(cx));
     }
 
     #[test]

@@ -121,6 +121,17 @@ set). It is the installed guide to settings, layouts, commands and mods.
 Read the generated `.d.ts` files beside it for full API details; do not edit
 those files or the generated guide. The app rewrites them on start.
 
+`settings.json` has `tab_min_width` (default `150`, range `0` to `400` logical
+pixels), also in Settings → Look. The tabs mod applies it live; `0` restores
+content-sized tabs and overflow remains horizontally scrollable.
+
+On macOS, `settings.json` has `option_shortcuts`: `"both"` (default), `"left"`,
+or `"right"`, also in Settings → Keyboard. This limits which Option key activates
+existing `alt` bindings. Set it and `option_as_alt` to `"left"` to keep left Option
+for navigation and right Option for native characters and accents. Changes apply
+live. Side-restricted Option shortcuts omit native menu accelerators and labels;
+the bindings still work in the window, and menu clicks still work.
+
 - Home defaults to `~/.config/herdr-app`; `HERDR_APP_HOME` selects another.
 - Mods live in `mods/<name>/` with `main.js` and optional `mod.json`.
   They are trusted JavaScript with command and network access.

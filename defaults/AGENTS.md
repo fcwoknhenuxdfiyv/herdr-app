@@ -753,6 +753,23 @@ What's about the user, never a look:
   Option input on every layout. `"left"` / `"right"` makes only that Option
   key act as Alt; the other types characters. Changes apply immediately, including layout
   switches. Linux and Windows are unchanged.
+- `tab_min_width`: minimum tab-pill width in logical pixels, default `150`,
+  from `0` to `400`. Settings → Look → Minimum tab width changes it live.
+  `0` restores content-sized tabs. Longer names can expand beyond the minimum
+  (the tab bar still truncates long labels); overflow scrolls horizontally.
+  The shipped `tabs` mod uses it; personal tab mods can read `settings().tab_min_width`.
+- `option_shortcuts`: macOS only, `"both"` (default), `"left"`, or `"right"`.
+  Settings → Keyboard → Option for app shortcuts selects which physical Option
+  key activates `alt` bindings, including bindings with Cmd, Ctrl or Shift.
+  It applies immediately to existing bindings; no keys.json edits are needed.
+  Both keys held together match either side; events without side information
+  match only `"both"`. Terminal Alt encoding remains controlled by `option_as_alt`.
+  For left Option navigation and right Option characters, set both preferences
+  to `"left"`. The unselected side keeps native characters and dead keys when
+  it is not configured as terminal Alt. Native menus cannot distinguish sides,
+  so side-restricted Option shortcuts have no native menu accelerator or shortcut
+  label; menu clicks and keyboard shortcuts in the window still work.
+  Linux and Windows ignore this setting.
 - `minimum_contrast`: terminal text contrast ratio, `1` (default) leaves
   program colors unchanged. Set it to `1.6` to enable the previous readability
   adjustment, or another number from `1` to `21`. Text below that ratio is

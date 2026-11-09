@@ -400,7 +400,7 @@ impl MacPlatform {
 
                     let item;
                     if let Some(keystrokes) = keystrokes {
-                        if keystrokes.len() == 1 {
+                        if keystrokes.len() == 1 && keystrokes[0].supports_native_key_equivalent() {
                             let keystroke = &keystrokes[0];
                             let mut mask = NSEventModifierFlags::empty();
                             for (modifier, flag) in &[

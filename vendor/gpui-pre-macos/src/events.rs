@@ -808,6 +808,32 @@ mod tests {
     }
 
     #[test]
+    fn option_shortcut_sides_preserve_native_text_and_dead_keys() {
+        use gpui::{KeybindingKeystroke, OptionSide};
+        let _guard = NATIVE_KEY_TEST.lock().unwrap();
+        let previous_alt = option_as_alt();
+        let previous_shortcuts = gpui::option_shortcuts();
+        set_option_as_alt(Some(OptionAsAlt::Left));
+        for required in [None, Some(OptionSide::Left), Some(OptionSide::Right)] {
+            gpui::set_option_shortcuts(required);
+            for (bits, side) in [(0x20, OptionSide::Left), (0x40, OptionSide::Right), (0x60, OptionSide::Both)] {
+                let flags = NSEventModifierFlags::NSAlternateKeyMask | NSEventModifierFlags::from_bits_retain(bits);
+                for code in [0x04, 0x23, 0x0e] {
+                    let event = native_key(code, flags);
+                    let target = KeybindingKeystroke::from_keystroke(Keystroke::parse(&format!("alt-{}", event.key)).unwrap());
+                    let expected = required.is_none() || required == Some(side) || side == OptionSide::Both;
+                    assert_eq!(event.should_match(&target), expected);
+                    assert_eq!(target.supports_native_key_equivalent(), required.is_none());
+                    let text = translate_key(code, if side == OptionSide::Right { OPTION_MOD } else { NO_MOD }, false);
+                    assert_eq!(event.key_char, (!text.is_empty()).then_some(text));
+                }
+            }
+        }
+        gpui::set_option_shortcuts(previous_shortcuts);
+        set_option_as_alt(Some(previous_alt));
+    }
+
+    #[test]
     fn caps_lock_goes_into_the_typed_text() {
         assert_eq!(text_modifiers(false, false, false), NO_MOD);
         assert_eq!(text_modifiers(false, false, true), CAPS_LOCK_MOD);

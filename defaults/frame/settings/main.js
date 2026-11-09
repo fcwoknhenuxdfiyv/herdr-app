@@ -509,7 +509,19 @@ export default class Settings extends View {
         ),
       )
       .child(fontRow("font", "font_size", "Terminal font", s.font_family, DEFAULT_FONT, s.font_size))
-      .child(fontRow("ui_font", null, "Interface font", s.ui_font_family, DEFAULT_UI_FONT));
+      .child(fontRow("ui_font", null, "Interface font", s.ui_font_family, DEFAULT_UI_FONT))
+      .child(this.tabWidth(t));
+  }
+
+  tabWidth(t) {
+    const width = this.person.tab_min_width ?? settings().tab_min_width ?? 150;
+    const change = (delta, cx) => this.change((person) => {
+      person.tab_min_width = Math.max(0, Math.min(400, (person.tab_min_width ?? 150) + delta));
+    }, cx);
+    return this.row(t, "Minimum tab width", "Pixels at 100% zoom. Longer names can expand; overflow scrolls. 0 fits each tab to its content.",
+      h_flex().gap(8).items_center()
+        .child(this.stepper(t, "st-tab-min-width", `${width} px`, (_e, cx) => change(-10, cx), (_e, cx) => change(10, cx)))
+        .child(this.button(t, "st-tab-min-width-reset", "Reset", (_e, cx) => this.change((person) => { delete person.tab_min_width; }, cx))));
   }
 
   keyboard(t) {
@@ -538,7 +550,30 @@ export default class Settings extends View {
           .on_click((_e, cx) => this.change((p) => { p.option_as_alt = value; }, cx))
           .child(div().text_color(on ? t.accent : t.muted).child(on ? "◉" : "○"))
           .child(div().text_size(14).text_color(t.foreground).child(label));
-      }));
+      }))
+      .child(div().h(18))
+      .child(this.heading(t, "Option for app shortcuts"))
+      .child(div().pb(12).text_size(13).text_color(t.dim).child("Choose which Option key activates alt bindings in keys.json. To type with Right Option, choose Left only here and Left Option is Alt above."))
+      .children([
+        ["both", "Both Option keys"],
+        ["left", "Left only"],
+        ["right", "Right only"],
+      ].map(([value, label]) => {
+        const on = (this.person.option_shortcuts ?? "both") === value;
+        return h_flex()
+          .id(`st-option-shortcuts-${value}`)
+          .gap(10)
+          .px(12)
+          .py(10)
+          .rounded(7)
+          .items_center()
+          .cursor_pointer()
+          .hover((s) => s.bg(t.hover))
+          .on_click((_e, cx) => this.change((p) => { p.option_shortcuts = value; }, cx))
+          .child(div().text_color(on ? t.accent : t.muted).child(on ? "◉" : "○"))
+          .child(div().text_size(14).text_color(t.foreground).child(label));
+      }))
+      .child(div().pt(8).text_size(12.5).text_color(t.dim).child("With one side selected, Option shortcuts work in the window but are not shown as native menu shortcuts."));
   }
 
   // Machines -------------------------------------------------------------

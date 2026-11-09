@@ -315,6 +315,45 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    fn mac_option_shortcuts_filter_sides_without_changing_text() {
+        use gpui::{KeybindingKeystroke, Keystroke, OptionSide};
+        use crate::settings::{OptionShortcuts, Settings};
+        let previous = crate::settings::get().as_ref().clone();
+        for (setting, required) in [(OptionShortcuts::Both, None), (OptionShortcuts::Left, Some(OptionSide::Left)), (OptionShortcuts::Right, Some(OptionSide::Right))] {
+            crate::settings::set(Settings { option_shortcuts: setting, ..previous.clone() });
+            for side in [None, Some(OptionSide::Left), Some(OptionSide::Right), Some(OptionSide::Both)] {
+                let expected = required.is_none() || side == required || side == Some(OptionSide::Both);
+                for keys in ["alt-h", "alt-e", "alt-shift-h", "alt-ctrl-p", "cmd-alt-h", "alt-1", "alt-left", "alt-backspace"] {
+                    let bindings = super::parse(&serde_json::json!({"global": {keys: "pane.zoom"}}).to_string()).unwrap();
+                    let event = Keystroke { option_side: side, key_char: Some("˙".into()), ..Keystroke::parse(keys).unwrap() };
+                    assert_eq!(bindings[0].match_keystrokes(std::slice::from_ref(&event)) == Some(false), expected, "{setting:?} {side:?} {keys}");
+                    assert_eq!(event.key_char.as_deref(), Some("˙"));
+                    assert_eq!(bindings[0].keystrokes()[0].supports_native_key_equivalent(), required.is_none());
+                }
+                let event = Keystroke { option_side: side, unshifted_key: Some("[".into()), ..Keystroke::parse("alt-{").unwrap() };
+                for keys in ["alt-{", "alt-shift-["] {
+                    let target = KeybindingKeystroke::from_keystroke(Keystroke::parse(keys).unwrap());
+                    assert_eq!(event.should_match(&target), expected);
+                }
+                let event = Keystroke { option_side: side, key_char: None, ..Keystroke::parse("alt-e").unwrap() };
+                let target = KeybindingKeystroke::from_keystroke(Keystroke::parse("alt-e").unwrap());
+                assert_eq!(event.should_match(&target), expected);
+            }
+            for keys in ["cmd-c", "ctrl-c", "f2"] {
+                let event = Keystroke::parse(keys).unwrap();
+                let target = KeybindingKeystroke::from_keystroke(event.clone());
+                assert!(event.should_match(&target));
+                assert!(target.supports_native_key_equivalent());
+            }
+            let event = Keystroke { option_side: Some(OptionSide::Right), key_char: Some("˙".into()), ..Keystroke::parse("alt-h").unwrap() };
+            let character = KeybindingKeystroke::from_keystroke(Keystroke::parse("˙").unwrap());
+            assert!(event.should_match(&character));
+        }
+        crate::settings::set(previous);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     fn mac_shifted_punctuation_matches_existing_keys_files() {
         use gpui::{KeybindingKeystroke, Keystroke};
         let bindings = super::parse(include_str!("../defaults/keys.macos.json")).unwrap();

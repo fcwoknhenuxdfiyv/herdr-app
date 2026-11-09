@@ -13,6 +13,19 @@ use std::path::PathBuf;
 
 pub const DEFAULT: &str = include_str!("../defaults/menus.json");
 
+#[cfg(target_os = "macos")]
+struct CurrentMenus(Vec<Menu>);
+#[cfg(target_os = "macos")]
+impl gpui::Global for CurrentMenus {}
+
+#[cfg(target_os = "macos")]
+pub fn refresh(cx: &mut gpui::App) {
+    if let Some(menus) = cx.try_global::<CurrentMenus>() {
+        let menus = menus.0.clone();
+        crate::macos::menus(cx, &menus);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     Separator,
@@ -64,7 +77,10 @@ pub fn load() -> Result<Vec<Menu>, String> {
 pub fn apply(cx: &mut gpui::App) -> Result<(), String> {
     let menus = load()?;
     #[cfg(target_os = "macos")]
-    crate::macos::menus(cx, &menus);
+    {
+        crate::macos::menus(cx, &menus);
+        cx.set_global(CurrentMenus(menus));
+    }
     #[cfg(not(target_os = "macos"))]
     let _ = (cx, menus);
     Ok(())
